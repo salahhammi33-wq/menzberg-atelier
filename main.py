@@ -1,68 +1,71 @@
 import streamlit as st
 import pandas as pd
-import json, io
+import io, re
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Menzberg Live Hook", layout="wide")
+st.set_page_config(page_title="Menzberg Production", layout="wide")
 
-# On utilise le cache pour garder les commandes même si la page est rafraîchie
-if 'commandes_live' not in st.session_state:
-    st.session_state['commandes_live'] = []
+# Initialisation de la mémoire
+if 'prod_data' not in st.session_state:
+    st.session_state['prod_data'] = []
 
-# --- FONCTION DE CALCUL MENZBERG ---
-def traiter_donnees(data):
-    lignes = []
-    client = data.get('name', 'Client')
-    for item in data.get('details', []):
-        p_name = item.get('product_name', '')
-        qte = int(item.get('quantity', 1))
-        opt = item.get('product_options', 'Standard')
-        p_low = p_name.lower()
+st.title("🚀 Menzberg : Saisie Rapide Atelier")
 
-        if "pack 7" in p_low:
-            lignes.append({"Produit": "Sac Standard", "Couleur": opt, "Qte": qte * 3})
-            lignes.append({"Produit": "Sac BigBag", "Couleur": opt, "Qte": qte * 4})
-        elif "pack 5" in p_low:
-            lignes.append({"Produit": "Sac Standard", "Couleur": opt, "Qte": qte * 5})
-        elif any(x in p_low for x in ["boudin", "anti-cafard"]):
-            lignes.append({"Produit": "Boudin Porte", "Couleur": opt, "Qte": qte * 4})
-        else:
-            lignes.append({"Produit": p_name, "Couleur": opt, "Qte": qte})
-    return lignes
+# --- ZONE DE SAISIE ---
+st.subheader("📝 Copier-Coller depuis TikTak")
+input_text = st.text_area("Colle ici le texte de tes commandes (même en vrac) :", height=150, 
+                         placeholder="Exemple : Pack 7 Sacs - Gris - Qté: 2\nBoudin anti-cafard - Marron - 1")
 
-# --- RÉCEPTION DU WEBHOOK (La porte d'entrée) ---
-# Cette partie permet à TikTak d'envoyer les infos directement
-query_params = st.query_params
-if "webhook" in query_params:
-    # Note: Streamlit ne gère pas les POST directement facilement sans FastAPI, 
-    # mais pour tester la liaison, on utilise la zone de simulation ci-dessous.
-    pass
-
-st.title("🛡️ Menzberg Atelier - Live")
-
-# --- AFFICHAGE ---
-if st.session_state['commandes_live']:
-    df = pd.DataFrame(st.session_state['commandes_live'])
-    st.subheader("📋 LISTE DE PRODUCTION")
-    recap = df.groupby(['Produit', 'Couleur'])['Qte'].sum().reset_index()
-    st.dataframe(recap, use_container_width=True)
+if st.button("➕ Ajouter à la production", type="primary"):
+    lines = input_text.split('\n')
+    new_entries = []
     
-    # Export
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf) as wr: recap.to_excel(wr, index=False)
-    st.download_button("📥 Télécharger Excel", buf.getvalue(), "Production.xlsx")
-else:
-    st.info("En attente de commandes... Utilise la simulation ci-dessous pour tester.")
+    for line in lines:
+        if not line.strip(): continue
+        
+        # Extraction intelligente de la quantité (cherche un chiffre isolé ou après 'x' ou ':')
+        qte_match = re.search(r'(\d+)(?=\s*$|(?:\s*Qté|\s*x))|(?<=x\s*)(\d+)', line, re.IGNORECASE)
+        qte = int(qte_match.group(0)) if qte_match else 1
+        
+        line_low = line.lower()
+        
+        # Détection Couleur (cherche les mots classiques)
+        couleur = "Standard"
+        for c in ["gris", "marron", "noir", "bleu", "beige", "chocolat", "anthracite"]:
+            if c in line_low: couleur = c.capitalize()
 
-# --- ZONE DE TEST TIKTAK ---
-st.divider()
-with st.expander("🛠️ SIMULATION TIKTAK PRO (Copie ton JSON ici)"):
-    json_input = st.text_area("Colle ici le JSON de TikTak :", height=200)
-    if st.button("Lancer la simulation"):
-        try:
-            data = json.loads(json_input)
-            res = traiter_donnees(data)
-            st.session_state['commandes_live'].extend(res)
+        # LOGIQUE DE CONVERSION MENZBERG
+        if "pack 7" in line_low:
+            new_entries.append({"Produit": "Sac Standard", "Couleur": couleur, "Qte": qte * 3})
+            new_entries.append({"Produit": "Sac BigBag", "Couleur": couleur, "Qte": qte * 4})
+        elif "pack 5" in line_low:
+            new_entries.append({"Produit": "Sac Standard", "Couleur": couleur, "Qte": qte * 5})
+        elif any(x in line_low for x in ["boudin", "anti-cafard"]):
+            new_entries.append({"Produit": "Boudin Porte", "Couleur": couleur, "Qte": qte * 4})
+        else:
+            # Pour les produits unitaires (Nema, Booka, etc.)
+            new_entries.append({"Produit": line.split('-')[0].strip()[:20], "Couleur": couleur, "Qte": qte})
+
+    st.session_state['prod_data'].extend(new_entries)
+    st.success(f"{len(new_entries)} lignes ajoutées !")
+
+# --- AFFICHAGE RESULTATS ---
+if st.session_state['prod_data']:
+    df = pd.DataFrame(st.session_state['prod_data'])
+    
+    st.divider()
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📊 Total à fabriquer")
+        recap = df.groupby(['Produit', 'Couleur'])['Qte'].sum().reset_index()
+        st.table(recap)
+    
+    with col2:
+        st.subheader("⚙️ Actions")
+        if st.button("🗑️ Vider tout"):
+            st.session_state['prod_data'] = []
             st.rerun()
-        except:
-            st.error("Format JSON incorrect")
+            
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf) as wr: recap.to_excel(wr, index=False)
+        st.download_button("📥 Télécharger l'ordre de coupe (Excel)", buf.getvalue(), "Production_Menzberg.xlsx")
